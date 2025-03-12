@@ -685,7 +685,6 @@ class TraceCtxManager:
 
 
 class ComputerAction:
-    # Class variable for screenshot caching
     _screenshot_cache: dict[str, str] = {}
 
     @classmethod
@@ -710,23 +709,17 @@ class ComputerAction:
             ),
         )
 
-        # Get screenshot
         if is_async:
-            # Ensure computer is AsyncComputer type
             assert isinstance(computer, AsyncComputer), "Computer must be AsyncComputer"
             screenshot = await cls._get_screenshot_async(computer, action.tool_call)
             screenshot_hash = await computer.screenshot_hash()
         else:
-            # Ensure computer is Computer type
             assert isinstance(computer, Computer), "Computer must be Computer for sync operations"
             screenshot = cls._get_screenshot_sync(computer, action.tool_call)
             screenshot_hash = computer.screenshot_hash()
 
-        # Ensure output is a string
         output_str = str(screenshot)
-        # Call hook functions
         hook_tasks = []
-        # Ensure output_str is string type
         output_str_safe = str(output_str)
         hook_tasks.append(
             hooks.on_tool_end(context_wrapper, agent, action.computer_tool, output_str_safe)
@@ -737,12 +730,9 @@ class ComputerAction:
                     context_wrapper, agent, action.computer_tool, output_str_safe)
             )
         await asyncio.gather(*hook_tasks)
-        # Check if the same screenshot already exists in cache
         if screenshot_hash in cls._screenshot_cache:
-            # Use reference mechanism
             image_url = cls._screenshot_cache[screenshot_hash]
         else:
-            # Cache the new screenshot
             image_url = f"data:image/png;base64,{output_str}"
             cls._screenshot_cache[screenshot_hash] = image_url
         return ToolCallOutputItem(
