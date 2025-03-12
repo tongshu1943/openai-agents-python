@@ -685,6 +685,9 @@ class TraceCtxManager:
 
 
 class ComputerAction:
+    # 添加一个类变量用于缓存截图
+    _screenshot_cache: dict[str, str] = {}
+
     @classmethod
     async def execute(
         cls,
@@ -695,33 +698,53 @@ class ComputerAction:
         context_wrapper: RunContextWrapper[TContext],
         config: RunConfig,
     ) -> RunItem:
-        output_func = (
-            cls._get_screenshot_async(action.computer_tool.computer, action.tool_call)
-            if isinstance(action.computer_tool.computer, AsyncComputer)
-            else cls._get_screenshot_sync(action.computer_tool.computer, action.tool_call)
-        )
-
-        _, _, output = await asyncio.gather(
+        computer = action.computer_tool.computer
+        is_async = isinstance(computer, AsyncComputer)
+        # 执行工具调用
+        await asyncio.gather(
             hooks.on_tool_start(context_wrapper, agent, action.computer_tool),
             (
                 agent.hooks.on_tool_start(context_wrapper, agent, action.computer_tool)
                 if agent.hooks
                 else _utils.noop_coroutine()
             ),
-            output_func,
         )
 
-        await asyncio.gather(
-            hooks.on_tool_end(context_wrapper, agent, action.computer_tool, output),
-            (
-                agent.hooks.on_tool_end(context_wrapper, agent, action.computer_tool, output)
-                if agent.hooks
-                else _utils.noop_coroutine()
-            ),
-        )
+        # 获取截图
+        if is_async:
+            # 确保computer是AsyncComputer类型
+            assert isinstance(computer, AsyncComputer), "Computer must be AsyncComputer"
+            screenshot = await cls._get_screenshot_async(computer, action.tool_call)
+            screenshot_hash = await computer.screenshot_hash()
+        else:
+            # 确保computer是Computer类型
+            assert isinstance(computer, Computer), "Computer must be Computer for sync operations"
+            screenshot = cls._get_screenshot_sync(computer, action.tool_call)
+            screenshot_hash = computer.screenshot_hash()
 
-        # TODO: don't send a screenshot every single time, use references
-        image_url = f"data:image/png;base64,{output}"
+        # 确保output是字符串
+        output_str = str(screenshot)
+        # 调用钩子函数
+        hook_tasks = []
+        # 确保output_str是字符串类型
+        output_str_safe = str(output_str)
+        hook_tasks.append(
+            hooks.on_tool_end(context_wrapper, agent, action.computer_tool, output_str_safe)
+        )
+        if agent.hooks:
+            hook_tasks.append(
+                agent.hooks.on_tool_end(
+                    context_wrapper, agent, action.computer_tool, output_str_safe)
+            )
+        await asyncio.gather(*hook_tasks)
+        # 检查缓存中是否已有相同的截图
+        if screenshot_hash in cls._screenshot_cache:
+            # 使用引用机制
+            image_url = cls._screenshot_cache[screenshot_hash]
+        else:
+            # 缓存新的截图
+            image_url = f"data:image/png;base64,{output_str}"
+            cls._screenshot_cache[screenshot_hash] = image_url
         return ToolCallOutputItem(
             agent=agent,
             output=image_url,
@@ -736,11 +759,13 @@ class ComputerAction:
         )
 
     @classmethod
-    async def _get_screenshot_sync(
+    def _get_screenshot_sync(
         cls,
-        computer: Computer,
+        computer: Computer | None,
         tool_call: ResponseComputerToolCall,
     ) -> str:
+        if computer is None:
+            raise TypeError("Computer cannot be None for _get_screenshot_sync")
         action = tool_call.action
         if isinstance(action, ActionClick):
             computer.click(action.x, action.y, action.button)
@@ -790,3 +815,17 @@ class ComputerAction:
             await computer.wait()
 
         return await computer.screenshot()
+    @classmethod
+    async def _get_screenshot_hash_async(
+        cls,
+        computer: AsyncComputer,
+    ) -> str:
+        """Returns a hash of the current screenshot from an AsyncComputer."""
+        return await computer.screenshot_hash()
+    @classmethod
+    def _get_screenshot_hash_sync(
+        cls,
+        computer: Computer,
+    ) -> str:
+        """Returns a hash of the current screenshot from a Computer."""
+        return computer.screenshot_hash()
