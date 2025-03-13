@@ -720,7 +720,7 @@ class ComputerAction:
             ),
         )
 
-        # TODO: don't send a screenshot every single time, use references
+        # Use base64 encoding for the screenshot
         image_url = f"data:image/png;base64,{output}"
         return ToolCallOutputItem(
             agent=agent,
